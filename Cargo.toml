@@ -2,6 +2,12 @@
 resolver = "3"
 members = ["crates/*"]
 
+[workspace.package]
+# The workspace uses `String::from_utf16le` and `core::hint::cold_path`,
+# which are unstable before 1.98. Declaring this makes cargo report the
+# version requirement instead of failing with a bare E0658.
+rust-version = "1.98"
+
 [workspace.dependencies]
 base64 = { version = "0.23.1" }
 chrono = "0.4.45"

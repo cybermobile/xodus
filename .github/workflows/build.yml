@@ -1,0 +1,177 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build instead of silently rebuilding a stale Cargo.lock.
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  # Lowest toolchain the workspace is known to compile on. Keep in sync with
+  # `workspace.package.rust-version` in Cargo.toml and the README prerequisites.
+  MSRV: "1.98"
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the macOS leg because Linux failed (or vice versa) - when
+      # something is broken we want to see whether it is broken everywhere.
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            pkg-config \
+            protobuf-compiler
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Record toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          cargo clippy --version
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-build-
+
+      # `--locked` makes an out-of-date Cargo.lock a hard error rather than a
+      # silent dependency bump that only reproduces in CI.
+      - name: Fetch dependencies
+        run: cargo fetch --locked --target ${{ matrix.target }}
+
+      # The real "what is broken" step. Diagnostics are streamed through
+      # scripts/cargo-annotate.py so every error and warning shows up inline on
+      # the changed lines in the PR UI instead of being buried in the log.
+      - name: Build workspace (release)
+        id: build
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release --workspace --locked \
+            --target ${{ matrix.target }} \
+            --message-format=json \
+            | python3 scripts/cargo-annotate.py "${{ matrix.target }}"
+
+      # Build test/bench/example targets too. `cargo build` above only covers
+      # lib+bin, so a broken `#[cfg(test)]` module would otherwise slip through
+      # this job entirely.
+      - name: Build all targets (including tests)
+        if: always() && steps.build.outcome != 'cancelled'
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --workspace --locked --all-targets \
+            --target ${{ matrix.target }} \
+            --message-format=json \
+            | python3 scripts/cargo-annotate.py "${{ matrix.target }} (all-targets)"
+
+      - name: Upload binaries
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: xodus-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            target/${{ matrix.target }}/release/xodus-cli
+            target/${{ matrix.target }}/release/xodus-service
+
+      - name: Smoke-test the CLI
+        # Only meaningful when the binary can run on the runner itself.
+        if: always() && steps.build.outcome == 'success' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          ./target/${{ matrix.target }}/release/xodus-cli --version
+          ./target/${{ matrix.target }}/release/xodus-cli --help
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.target }}"
+            echo
+            echo "| Step | Result |"
+            echo "| --- | --- |"
+            echo "| Release build | ${{ steps.build.outcome }} |"
+            echo
+            echo "Toolchain: \`$(rustc --version)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  msrv:
+    name: Minimum supported Rust (1.98)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev libssl-dev pkg-config protobuf-compiler
+
+      # The workspace uses `String::from_utf16le` and `core::hint::cold_path`,
+      # both of which are unstable before 1.98. Building on an older stable
+      # fails with a bare E0658 that gives no hint about the real cause, so
+      # check the documented minimum explicitly.
+      - name: Install MSRV toolchain
+        run: |
+          rustup toolchain install "$MSRV" --profile minimal
+          rustup default "$MSRV"
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: msrv-${{ env.MSRV }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check workspace on MSRV
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --workspace --locked --all-targets \
+            --message-format=json \
+            | python3 scripts/cargo-annotate.py "msrv-$MSRV"

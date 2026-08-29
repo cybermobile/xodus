@@ -137,6 +137,11 @@ mod test {
     use crate::tokens::TokenManager;
     use crate::tokens::device::ensure_device_credentials;
 
+    // Provisions a real device against Microsoft's live login endpoints, so it
+    // needs network access and cannot run unattended in CI. Same treatment as
+    // `auth::test_minecraft_win_auth`; run it explicitly with
+    // `cargo test -- --ignored test_get_xbox_live_dev_token`.
+    #[ignore]
     #[tokio::test]
     async fn test_get_xbox_live_dev_token() {
         let client = reqwest::Client::new();
