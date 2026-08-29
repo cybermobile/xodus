@@ -62,6 +62,7 @@ The project structure is as follows.
 - Rust version 1.98 or later
 - Right now CLI relies on wry and tao to show a login page. Consult https://docs.rs/wry/latest/wry/#platform-considerations
 - xodus-service relies on `protoc` to compile `proto/` definitions make sure to install it for your platform
+- Running games (`xodus-cli run`) requires a wine build patched with `WINE_DLL_FILE_MAP` support - see [docs/xodus/wine.md](docs/xodus/wine.md)
 
 ### Running
 
@@ -101,7 +102,9 @@ Commands:
   license     Dump CIKs for use with XvdTool
   extract     Extract locally stored msixvc file
   login       
+  logout      
   streaming   Download and extract the game through streaming algorithm
+  run         Run a Game with xodus wine
   clep        Generate or decrypt base64-encoded CLEP challenge data
   sp-license  Decode SPLicenseBlock
   help        Print this message or the help of the given subcommand(s)

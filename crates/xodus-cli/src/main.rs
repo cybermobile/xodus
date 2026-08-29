@@ -62,8 +62,16 @@ enum SubCommand {
     #[command(about = "Run a Game with xodus wine")]
     Run {
         source: String,
-        wine: String,
-        #[arg(short, long)]
+        #[clap(
+            help = "Path to a wine build with WINE_DLL_FILE_MAP support; defaults to \
+                    $XODUS_WINE, then `xodus-wine`/`wine` in PATH (see docs/xodus/wine.md)"
+        )]
+        wine: Option<String>,
+        #[arg(
+            short,
+            long,
+            help = "Executable to launch when the package contains several"
+        )]
         exe: Option<String>,
         #[arg(short, long)]
         market: Option<String>,
