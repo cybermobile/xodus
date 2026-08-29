@@ -18,3 +18,9 @@ pub struct MSATokenResponse {
     pub device_rps: String,
     pub device_expiry: i64,
 }
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ErrorResponse {
+    pub message: String,
+}

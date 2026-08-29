@@ -5,3 +5,4 @@
 - [Licenses](./licenses.md)
 - [CLEP secrets](./clep.md)
 - [Wine integration](./wine.md)
+- [xodus-service IPC](./service.md)

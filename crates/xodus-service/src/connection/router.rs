@@ -39,7 +39,10 @@ pub async fn route(
         };
 
         if let Err(err) = res {
+            // Handler I/O errors leave the stream in an unknown position, so
+            // drop the connection rather than misparse the next frame.
             log::error!("There was an error handling the message: {err}");
+            return;
         }
     }
 }

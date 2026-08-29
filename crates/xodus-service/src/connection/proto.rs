@@ -4,5 +4,9 @@ pub async fn handle(
     _socket: &mut tokio::net::UnixStream,
     _context: &mut SimpleContext,
 ) -> tokio::io::Result<()> {
-    unimplemented!("Protobuf path isnt implemented yet");
+    // No framing is defined for this transport yet, so the stream cannot be
+    // resynchronized; the router closes the connection on error.
+    Err(tokio::io::Error::other(
+        "the protobuf transport is not implemented yet; use the XML transport",
+    ))
 }

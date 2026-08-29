@@ -60,7 +60,9 @@ For every `keep_encrypted` file in the package, `run`:
 
 The mappings are passed to wine in the `WINE_DLL_FILE_MAP` environment
 variable and wine is spawned with the entry executable's NT path as the
-argument. See `crates/xodus-cli/src/commands/run.rs`.
+argument. `run` also starts (or connects to) `xodus-service` and passes its
+socket to wine as `XODUS_SOCKET` — see [service.md](./service.md). See
+`crates/xodus-cli/src/commands/run.rs`.
 
 ## The `WINE_DLL_FILE_MAP` contract
 

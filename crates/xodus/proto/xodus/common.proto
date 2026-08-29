@@ -8,4 +8,7 @@ enum XodusMessageType {
     PONG = 2;
     MSA_TOKEN_REQUEST=3;
     MSA_TOKEN_RESPONSE=4;
+    // Sent instead of <request type + 1> when handling a request fails; the
+    // payload is an XML-serialized ErrorResponse with a human-readable message.
+    ERROR_RESPONSE=5;
 }

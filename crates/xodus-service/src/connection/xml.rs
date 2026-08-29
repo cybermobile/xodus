@@ -1,11 +1,11 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use xodus::ipc::{XML_MAGIC, encode_frame};
 use xodus::models::live::ExchangeUserTokenOutcome;
 use xodus::models::secrets::Token;
 use xodus::models::soap;
-use xodus::models::xgameruntime::xuser::{MSATokenRequest, MSATokenResponse};
+use xodus::models::xgameruntime::xuser::{ErrorResponse, MSATokenRequest, MSATokenResponse};
 use xodus::proto::xodus::XodusMessageType;
 
-use crate::XML_MAGIC;
 use crate::simple_context::SimpleContext;
 
 pub async fn handle(
@@ -21,15 +21,23 @@ pub async fn handle(
     log::debug!("Read buffer");
     let message_type = XodusMessageType::try_from(message_type as i32).unwrap_or_default();
 
-    let out_buf = match parse_message(context, message_type, buffer).await {
-        Ok(buf) => buf,
+    // A failed request answers with a typed ERROR_RESPONSE frame instead of an
+    // empty <request + 1> payload, so clients can tell "failed" from "empty".
+    let data = match parse_message(context, message_type, buffer).await {
+        Ok(buf) => encode_frame(XML_MAGIC, message_type as u16 + 1, &buf),
         Err(err) => {
-            log::error!("Failed parsing message: {err}");
-            vec![]
+            log::error!("Failed handling {message_type:?}: {err}");
+            let payload = quick_xml::se::to_string(&ErrorResponse {
+                message: err.to_string(),
+            })
+            .unwrap_or_default();
+            encode_frame(
+                XML_MAGIC,
+                XodusMessageType::ErrorResponse as u16,
+                payload.as_bytes(),
+            )
         }
     };
-
-    let data = super::encode_message(XML_MAGIC, message_type as u16 + 1, out_buf);
     socket.write_all(&data).await
 }
 
@@ -45,8 +53,11 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             log::debug!("String buffer: {string_buf:?}");
             let req = quick_xml::de::from_str::<MSATokenRequest>(string_buf)?;
-            let Token::Legacy(token) = context.tokens().get_user_sts_token()? else {
-                return Ok(vec![]);
+            let Token::Legacy(token) = context.tokens().get_user_sts_token().map_err(|err| {
+                format!("no user is logged in (run `xodus-cli login` first): {err}")
+            })?
+            else {
+                return Err("stored user STS token has an unsupported format".into());
             };
             let scope = if req.msa_full_trust {
                 "service::user.auth.xboxlive.com::MBI_SSL"
@@ -107,11 +118,14 @@ pub async fn parse_message(
                             log::warn!("Failed to persist refreshed STS token: {err}");
                         }
                     }
+                    if collection.security_tokens.is_empty() {
+                        return Err("token exchange returned too few security tokens".into());
+                    }
                     let token = collection.security_tokens.remove(0);
                     let expiry = chrono::DateTime::parse_from_rfc3339(&token.lifetime.expires)?;
                     let token: Token = token.into();
                     let Token::Compact(user_token) = token else {
-                        return Ok(vec![]);
+                        return Err("token exchange returned a non-compact user token".into());
                     };
                     let payload = MSATokenResponse {
                         token: user_token,
@@ -124,7 +138,10 @@ pub async fn parse_message(
                     let payload = quick_xml::se::to_string(&payload)?;
                     Ok(payload.as_bytes().to_vec())
                 }
-                _ => todo!("Error handling sill sucks"),
+                ExchangeUserTokenOutcome::Fault(pp) => {
+                    Err(format!("token exchange returned a fault: {pp:?}").into())
+                }
+                other => Err(format!("unexpected token exchange outcome: {other:?}").into()),
             }
         }
         _ => Err("Unimplemented".into()),

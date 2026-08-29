@@ -3,6 +3,7 @@ use std::os::fd::{AsFd, IntoRawFd};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use msixvc::layout::PAGE_SIZE;
 use msixvc::xvd::{SegmentFile, XvdFile};
@@ -185,6 +186,115 @@ fn matches_exe(internal_name: &str, wanted: &str) -> bool {
     name == wanted || name.ends_with(&format!("\\{wanted}"))
 }
 
+struct ServiceHandle {
+    socket: PathBuf,
+    // Present only when this launch spawned the service (it is stopped again
+    // once the game exits); None means one was already running.
+    child: Option<tokio::process::Child>,
+}
+
+fn find_service_binary() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("xodus-service");
+        if is_executable_file(&sibling) {
+            return Some(sibling);
+        }
+    }
+    find_in_path("xodus-service")
+}
+
+/// Connects to a running xodus-service or spawns one, so the game's
+/// xgameruntime side has an IPC endpoint. Best-effort: a launch without the
+/// service still works, Xbox Live services are just unavailable in-game.
+async fn ensure_service() -> Option<ServiceHandle> {
+    let Some(socket) = xodus::ipc::socket_path() else {
+        eprintln!("warning: XDG_RUNTIME_DIR is not set; running without xodus-service");
+        return None;
+    };
+
+    if xodus::ipc::ping(&socket, Duration::from_secs(2))
+        .await
+        .is_ok()
+    {
+        return Some(ServiceHandle {
+            socket,
+            child: None,
+        });
+    }
+
+    let Some(binary) = find_service_binary() else {
+        eprintln!(
+            "warning: xodus-service not found next to xodus-cli or in PATH; running without \
+             it - Xbox Live services will be unavailable in-game"
+        );
+        return None;
+    };
+
+    let mut child = match Command::new(&binary).spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!(
+                "warning: failed to start `{}`: {}; running without xodus-service",
+                binary.display(),
+                err
+            );
+            return None;
+        }
+    };
+
+    // Startup includes device (re-)authentication over the network, so allow
+    // a generous window before giving up.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if xodus::ipc::ping(&socket, Duration::from_secs(2))
+            .await
+            .is_ok()
+        {
+            return Some(ServiceHandle {
+                socket,
+                child: Some(child),
+            });
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            eprintln!(
+                "warning: xodus-service exited during startup ({}); running without it",
+                status
+            );
+            return None;
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!("warning: xodus-service did not come up in time; running without it");
+            let _ = child.start_kill();
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn stop_service(handle: Option<ServiceHandle>) {
+    let Some(ServiceHandle {
+        child: Some(mut child),
+        ..
+    }) = handle
+    else {
+        return;
+    };
+    // SIGINT gives the service its clean-shutdown path (socket file removal);
+    // escalate only if it does not exit.
+    if let Some(pid) = child.id() {
+        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGINT);
+    }
+    if tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+}
+
 pub async fn run(
     client: &reqwest::Client,
     tokens: &TokenManager,
@@ -365,14 +475,20 @@ pub async fn run(
         }
     };
 
-    let mut wn = match Command::new(&wine)
-        .arg(nt_entry)
-        .env("WINE_DLL_FILE_MAP", env_value)
-        .spawn()
-    {
+    let service = ensure_service().await;
+
+    let mut command = Command::new(&wine);
+    command.arg(nt_entry).env("WINE_DLL_FILE_MAP", env_value);
+    if let Some(service) = &service {
+        // Contract for the wine-side runtime: XODUS_SOCKET names the
+        // xodus-service IPC endpoint (see docs/xodus/service.md).
+        command.env("XODUS_SOCKET", &service.socket);
+    }
+    let mut wn = match command.spawn() {
         Ok(wn) => wn,
         Err(err) => {
             eprintln!("failed to start `{}`: {}", wine.display(), err);
+            stop_service(service).await;
             return ExitCode::FAILURE;
         }
     };
@@ -386,9 +502,18 @@ pub async fn run(
     })
     .expect("failed to install Ctrl+C handler");
 
-    let status = wn.wait().await.unwrap();
+    let status = wn.wait().await;
 
     cleanup().await;
+    stop_service(service).await;
+
+    let status = match status {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!("failed to wait for wine: {}", err);
+            return ExitCode::FAILURE;
+        }
+    };
 
     match status.code() {
         Some(code) => ExitCode::from(code as u8),
