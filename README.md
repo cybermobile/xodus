@@ -62,7 +62,7 @@ The project structure is as follows.
 - Rust version 1.98 or later
 - Right now CLI relies on wry and tao to show a login page. Consult https://docs.rs/wry/latest/wry/#platform-considerations
 - xodus-service relies on `protoc` to compile `proto/` definitions make sure to install it for your platform
-- Running games (`xodus-cli run`) requires a wine build patched with `WINE_DLL_FILE_MAP` support - see [docs/xodus/wine.md](docs/xodus/wine.md)
+- Running games (`xodus-cli run`) requires the [xodus wine fork](https://github.com/xodus-gaming/wine) (`bleeding-edge` branch, cloned with `--recurse-submodules`) - see [docs/xodus/wine.md](docs/xodus/wine.md) for building and how the integration works
 
 ### Running
 
