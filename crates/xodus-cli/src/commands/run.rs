@@ -18,6 +18,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::process::Command;
 use xodus::tokens::TokenManager;
 
+use crate::gameconfig::{self, MicrosoftGameConfig};
 use crate::license::get_license;
 
 #[cfg(target_os = "linux")]
@@ -338,6 +339,14 @@ pub async fn run(
 
     let xvd = XvdFile::parse(&mut file).await.expect("no err");
 
+    let package_full_name = xvd
+        .parse_package_full_name(&mut file)
+        .await
+        .ok()
+        .flatten()
+        .filter(|name| !name.is_empty());
+    let config: Option<MicrosoftGameConfig> = gameconfig::load_from_dir(out);
+
     let files = xvd.parse_user_package_files(&mut file).await.expect("ok");
     for (k, v) in &files {
         if k == "SegmentMetadata.bin" {
@@ -384,6 +393,12 @@ pub async fn run(
     };
 
     let full_key = content_key.unpack(&key).expect("failed to unpack");
+
+    let package_full_name = package_full_name
+        .or_else(|| Some(game_splicense.package_name.clone()).filter(|name| !name.is_empty()));
+    if let Some(name) = &package_full_name {
+        println!("package: {}", name);
+    }
 
     let mut fds = vec![];
 
@@ -459,18 +474,37 @@ pub async fn run(
             .iter()
             .filter(|(name, _)| name.to_ascii_lowercase().ends_with(".exe"))
             .collect();
-        match exes.as_slice() {
-            [] => {
-                eprintln!("no .exe found among the package's encrypted files");
-                return ExitCode::FAILURE;
-            }
-            [(_, nt_path)] => nt_path.clone(),
-            _ => {
-                eprintln!("this package contains multiple executables; pick one with --exe:");
-                for (name, _) in &exes {
-                    eprintln!("  --exe '{}'", name);
+        let declared = config
+            .as_ref()
+            .map(|c| {
+                c.declared_executables()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let from_config = declared.iter().find_map(|wanted| {
+            exes.iter()
+                .find(|(name, _)| matches_exe(name, wanted))
+                .copied()
+        });
+        if let Some((name, nt_path)) = from_config {
+            println!("launching declared executable {}", name);
+            nt_path.clone()
+        } else {
+            match exes.as_slice() {
+                [] => {
+                    eprintln!("no .exe found among the package's encrypted files");
+                    return ExitCode::FAILURE;
                 }
-                return ExitCode::FAILURE;
+                [(_, nt_path)] => nt_path.clone(),
+                _ => {
+                    eprintln!("this package contains multiple executables; pick one with --exe:");
+                    for (name, _) in &exes {
+                        eprintln!("  --exe '{}'", name);
+                    }
+                    return ExitCode::FAILURE;
+                }
             }
         }
     };
@@ -483,6 +517,33 @@ pub async fn run(
         // Contract for the wine-side runtime: XODUS_SOCKET names the
         // xodus-service IPC endpoint (see docs/xodus/service.md).
         command.env("XODUS_SOCKET", &service.socket);
+    }
+    // Package identity for the wine-side runtime (XPackage/XUser/XStore
+    // queries); see the identity section in docs/xodus/wine.md.
+    if let Some(name) = &package_full_name {
+        command.env("XODUS_PACKAGE_FULL_NAME", name);
+    }
+    if let Some(config) = &config {
+        if let Some(v) = &config.title_id {
+            command.env("XODUS_TITLE_ID", v);
+        }
+        if let Some(v) = &config.msa_app_id {
+            command.env("XODUS_MSA_APP_ID", v);
+        }
+        if let Some(v) = &config.store_id {
+            command.env("XODUS_STORE_ID", v);
+        }
+        if let Some(identity) = &config.identity {
+            if let Some(v) = &identity.name {
+                command.env("XODUS_PACKAGE_NAME", v);
+            }
+            if let Some(v) = &identity.publisher {
+                command.env("XODUS_PACKAGE_PUBLISHER", v);
+            }
+            if let Some(v) = &identity.version {
+                command.env("XODUS_PACKAGE_VERSION", v);
+            }
+        }
     }
     let mut wn = match command.spawn() {
         Ok(wn) => wn,

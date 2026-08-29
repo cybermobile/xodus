@@ -453,6 +453,42 @@ impl XvdFile {
         })
     }
 
+    /// Package Full Name recorded in the user-data package files header
+    /// (e.g. `Publisher.Game_1.0.0.0_x64__8wekyb3d8bbwe`), or `None` when the
+    /// package carries no such header (classic/NTFS-only layouts).
+    pub async fn parse_package_full_name<Reader>(
+        &self,
+        mut file: Reader,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>>
+    where
+        Reader: AsyncRead + AsyncSeek + Unpin,
+    {
+        file.seek(SeekFrom::Start(self.user_data_offset)).await?;
+        let user_data_header = {
+            let mut buf = XvdUserDataHeader::buffer();
+            file.read_exact(&mut buf).await?;
+            XvdUserDataHeader::from_array(&buf)
+        };
+        if user_data_header.t != 0 {
+            return Ok(None);
+        }
+        file.seek(SeekFrom::Start(
+            self.user_data_offset + user_data_header.length as u64,
+        ))
+        .await?;
+        let header = {
+            let mut buf = XvdUserDataPackageFilesHeader::buffer();
+            file.read_exact(&mut buf).await?;
+            XvdUserDataPackageFilesHeader::from_array(&buf)
+        };
+        let name = &header.package_full_name;
+        let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        if end == 0 {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf16(&name[..end])?))
+    }
+
     pub async fn parse_user_package_files<Reader>(
         &self,
         mut file: Reader,

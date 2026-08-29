@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use xodus::tokens::TokenManager;
 
 mod commands;
+mod gameconfig;
 mod license;
 mod package;
 mod webview;

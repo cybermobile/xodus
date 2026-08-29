@@ -96,10 +96,30 @@ If none is found, `run` exits with an error instead of launching.
 
 ## Selecting the executable
 
-If the package contains a single `.exe`, it is launched. If it contains
-several, `run` lists them and requires `--exe`; matching is case-insensitive,
-accepts `/` or `\` separators, and matches a whole path suffix — e.g.
-`--exe Game.exe` or `--exe Binaries/Win64/Game.exe`.
+Without `--exe`, `run` prefers the executable declared in the package's
+`MicrosoftGame.config` (PC-targeted entries first, in declaration order).
+Otherwise a single `.exe` is launched directly, and with several undeclared
+candidates `run` lists them and requires `--exe`; matching is
+case-insensitive, accepts `/` or `\` separators, and matches a whole path
+suffix — e.g. `--exe Game.exe` or `--exe Binaries/Win64/Game.exe`.
+
+## Package identity
+
+GDK titles resolve their package identity during runtime init
+(`GetCurrentPackageFullName`, the `XPackage`/`XStore` surface). `run` gathers
+it from the install — the Package Full Name from the XVD user-data header
+(SPLicense fallback) and the rest from `MicrosoftGame.config` — and passes it
+to wine in the environment, which is the contract for the wine-side runtime:
+
+| variable | source |
+| --- | --- |
+| `XODUS_PACKAGE_FULL_NAME` | XVD user-data package files header, else SPLicense |
+| `XODUS_TITLE_ID` | `MicrosoftGame.config` `<TitleId>` |
+| `XODUS_MSA_APP_ID` | `MicrosoftGame.config` `<MSAAppId>` |
+| `XODUS_STORE_ID` | `MicrosoftGame.config` `<StoreId>` |
+| `XODUS_PACKAGE_NAME` / `XODUS_PACKAGE_PUBLISHER` / `XODUS_PACKAGE_VERSION` | `MicrosoftGame.config` `<Identity>` attributes |
+
+Variables whose source is missing are simply not set.
 
 ## Related xodus-gaming repositories
 
