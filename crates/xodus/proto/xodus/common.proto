@@ -11,4 +11,6 @@ enum XodusMessageType {
     // Sent instead of <request type + 1> when handling a request fails; the
     // payload is an XML-serialized ErrorResponse with a human-readable message.
     ERROR_RESPONSE=5;
+    USER_IDENTITY_REQUEST=6;
+    USER_IDENTITY_RESPONSE=7;
 }

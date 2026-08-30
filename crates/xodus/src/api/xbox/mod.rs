@@ -12,7 +12,7 @@ pub async fn run(
     dev_token: LegacyToken,
     legacy: LegacyToken,
     relying_party: &str,
-) -> XstsResponse {
+) -> Result<XstsResponse, Box<dyn std::error::Error + Send + Sync>> {
     let user_token = crate::api::live::exchange_user_token(
         client,
         legacy,
@@ -26,34 +26,32 @@ pub async fn run(
             Some(soap::PolicyReference::mbi_ssl()),
         )],
     )
-    .await
-    .expect("Failed to get ms user token");
+    .await?;
 
     let user_token: Token = match user_token {
-        ExchangeUserTokenOutcome::Fault(_) => {
-            eprintln!("Failed to get exchange MS token");
-            panic!("TODO");
+        ExchangeUserTokenOutcome::Fault(pp) => {
+            return Err(format!("MS token exchange returned a fault: {pp:?}").into());
         }
         ExchangeUserTokenOutcome::Issued(
             soap::BodyContent::RequestSecurityTokenResponseCollection(mut collection),
         ) => {
+            if collection.security_tokens.is_empty() {
+                return Err("MS token exchange returned no security tokens".into());
+            }
             let token = collection.security_tokens.remove(0);
             token.into()
         }
         ExchangeUserTokenOutcome::Issued(soap::BodyContent::RequestSecurityTokenResponse(
             token,
         )) => (*token).into(),
-        _ => unreachable!("Only responses are handled"),
+        other => {
+            return Err(format!("unexpected MS token exchange outcome: {other:?}").into());
+        }
     };
     let Token::Compact(user_token) = user_token else {
-        eprintln!("Unsupported token");
-        panic!("TODO");
+        return Err("MS token exchange returned a non-compact token".into());
     };
-    let resp = authenticate_xbox_user(client, user_token)
-        .await
-        .expect("Failed to authenticate Xbox user");
+    let resp = authenticate_xbox_user(client, user_token).await?;
 
-    request_xsts_token(client, resp.token, relying_party)
-        .await
-        .expect("Failed to authenticate Xbox user")
+    Ok(request_xsts_token(client, resp.token, relying_party).await?)
 }

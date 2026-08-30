@@ -3,7 +3,9 @@ use xodus::ipc::{XML_MAGIC, encode_frame};
 use xodus::models::live::ExchangeUserTokenOutcome;
 use xodus::models::secrets::Token;
 use xodus::models::soap;
-use xodus::models::xgameruntime::xuser::{ErrorResponse, MSATokenRequest, MSATokenResponse};
+use xodus::models::xgameruntime::xuser::{
+    ErrorResponse, MSATokenRequest, MSATokenResponse, UserIdentityResponse,
+};
 use xodus::proto::xodus::XodusMessageType;
 
 use crate::simple_context::SimpleContext;
@@ -143,6 +145,26 @@ pub async fn parse_message(
                 }
                 other => Err(format!("unexpected token exchange outcome: {other:?}").into()),
             }
+        }
+        XodusMessageType::UserIdentityRequest => {
+            let Token::Legacy(user) = context.tokens().get_user_sts_token().map_err(|err| {
+                format!("no user is logged in (run `xodus-cli login` first): {err}")
+            })?
+            else {
+                return Err("stored user STS token has an unsupported format".into());
+            };
+            let device_token = context.device_token.as_ref().unwrap().clone();
+            let xsts =
+                xodus::api::xbox::run(&context.client, device_token, user, "http://xboxlive.com")
+                    .await?;
+            let payload = UserIdentityResponse {
+                xuid: xsts.xuid().unwrap_or_default().to_string(),
+                gamertag: xsts.gamertag().unwrap_or_default().to_string(),
+                modern_gamertag: xsts.modern_gamertag().unwrap_or_default().to_string(),
+                user_hash: xsts.user_hash().unwrap_or_default().to_string(),
+                expiry: xsts.not_after.timestamp(),
+            };
+            Ok(quick_xml::se::to_string(&payload)?.into_bytes())
         }
         _ => Err("Unimplemented".into()),
     }

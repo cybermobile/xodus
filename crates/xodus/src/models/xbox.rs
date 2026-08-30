@@ -55,6 +55,18 @@ impl XstsResponse {
             .first()
             .map(|claim| claim.uhs.as_str())
     }
+
+    pub fn xuid(&self) -> Option<&str> {
+        self.display_claims.xui.first()?.xid.as_deref()
+    }
+
+    pub fn gamertag(&self) -> Option<&str> {
+        self.display_claims.xui.first()?.gtg.as_deref()
+    }
+
+    pub fn modern_gamertag(&self) -> Option<&str> {
+        self.display_claims.xui.first()?.mgt.as_deref()
+    }
 }
 
 #[derive(Debug, Serialize)]

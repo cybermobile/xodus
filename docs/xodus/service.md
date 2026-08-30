@@ -45,6 +45,7 @@ connection.
 | --- | --- | --- |
 | `Ping` (1) | arbitrary bytes | echoed back as `Pong` (2); used as the liveness probe |
 | `MsaTokenRequest` (3) | `<MSATokenRequest><ClientId>…</ClientId></MSATokenRequest>` (optional `AllowUI`, `MSAFullTrust` flags) | brokers an MSA user token for the given client id from the stored login; replies `MsaTokenResponse` (4) with `Token`, `Expiry`, `DeviceRps`, `DeviceExpiry` |
+| `UserIdentityRequest` (6) | empty | resolves an XSTS token for the signed-in user and replies `UserIdentityResponse` (7) with `Xuid`, `Gamertag`, `ModernGamertag`, `UserHash`, `Expiry`; feeds the wine-side `XUser` surface |
 
 Requests the service does not recognize get an `ErrorResponse`. A request
 that requires a logged-in user (such as `MsaTokenRequest` without a stored
